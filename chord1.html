@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visualization Porject</title>
+<script src="https://d3js.org/d3.v7.js"></script>
+<style>
+	body, html {
+		height: 100%;
+		margin: 0;
+		font-family: Arial, sans-serif;
+	}
+	.wrapper {
+		display: grid;
+		grid-template-columns: 200px 700px auto;
+		grid-template-rows: auto 430px auto;
+		grid-template-areas:
+			"side-bar title-bar dropdown-cell"
+			"side-bar container right-panel"
+			"side-bar footer right-panel";
+		height: 100vh;
+		width: 100vw;
+	}
+	.title-bar {
+		grid-area: title-bar;
+		display: grid;
+		align-items: center;
+		justify-content: center;
+		margin-top: 10px;
+		margin-bottom: 0;
+		box-sizing: border-box;
+	}
+	.title-bar p {
+		text-align: left;
+		margin-top: 0;
+		margin-bottom: 0;
+	}
+	.slider-container {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 10px;
+		width: 500px;
+		font-size: 10px;
+	}
+	
+	input[type="range"] {
+		height: 10px;
+		border-radius: 5px;
+		width: 400px;
+		flex-grow: 1;
+	}
+	
+	.side-bar {
+		grid-area: side-bar;
+		display: flex;
+		box-sizing: border-box;
+		background-color: #c6f1dc;
+		text-align: left;
+	}
+	.container {
+		grid-area: container;
+		width: 100%;
+		height: 100%;
+	}
+	.footer {
+		grid-area: footer;
+		display: flex;
+		justify-content: center;
+	}
+	.right-panel {
+		grid-area: right-panel;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background-color: #4fcdcf;
+	}
+</style>
+</head>
+<body>
+	<div class="wrapper">
+		<div class="side-bar">
+			<ul>
+				<li><a href="javascript:void(0)"; onclick="resetDiagram()">Reset Chord Diagram</a></li>
+				<li><a href="#">Dummy Link</a></li>
+			</ul>
+		</div>
+		<div class="title-bar">
+			<p style="font-size: 20px; font-weight: bold; margin-bottom: 10px">Network Graph - Number Co-occurrence</p>
+			<p style="font-size: 8px">Show which numbers frequency appear together in the same draw</p>
+			<br>
+			<p style="font-size: 10px; margin-bottom: 10px">Threshold (Minimum frequency to be shown): <output id="range-value">0</output></p>
+			<div class="slider-container">
+				<span><output id="min-range">0</output> (Min)</span>
+				<input type="range" id="chord-slider" min="0" max="20" value="0" step="1" oninput="updateRangeValue(this.value)"/>
+				<span><output id="max-range">0</output> (Max)</span>
+			</div>
+		</div>
+		<svg id="chords" class="container" xmlns="http://w3.org/2000/svg">
+		</svg>
+		<div class="footer">
+		</div>
+		<div class="right-panel">
+			<p>Message from right panel</p>
+		</div>
+	</div>
+<script>
+	let markSixData = [];
+	let rangeValue = 0;
+	let maxRange = 0;
+	let minRange = 0;
+	let matrix;
+	let allValues;
+	let strokeScale;
+	let selectedIndex = -1;
+
+	async function startApp() {
+		markSixData = await loadCSVData();
+
+		countPairwiseNumbers();
+		maxRange = Math.max(...matrix.flat());
+		minRange = Math.min(...matrix.flat().filter(v => v > 0));
+
+		strokeScale = d3.scaleLinear()
+			.domain([minRange, maxRange])
+			.range([0.1, 2]); //[0.5, 5]
+
+		document.getElementById('chord-slider').setAttribute('min', minRange);
+		document.getElementById('chord-slider').setAttribute('max', maxRange);
+		document.getElementById('range-value').innerText = minRange;
+		document.getElementById('min-range').innerText = minRange;
+		document.getElementById('max-range').innerText = maxRange;
+		
+		drawChordDiagram();
+
+		const slider = document.getElementById('chord-slider');
+		slider.addEventListener('input', function() {
+			const threshold = +this.value;
+
+			d3.selectAll(".ribbon")
+				.style("opacity", d => {
+					if (selectedIndex < 0) {
+						return d.source.value >= threshold ? 0.7 : 0;
+					}
+					else {
+						const isConnected = d.source.index === selectedIndex || d.target.index === selectedIndex;
+						const isAboveThreshold = d.source.value >= threshold;
+						
+						return (isConnected && isAboveThreshold) ? 0.9 : 0.02;
+					}
+				})
+				.style("pointer-events", d => {
+					return d.source.value >= threshold ? "auto" : "none";
+				});
+		});
+		
+		const topPairs = await getTopPairs(9);
+
+		const panel = d3.select(".right-panel");
+		panel.html("<h3>Top 9 Pairings</h3>");
+
+		const list = panel.append("ul").style("list-style", "none").style("padding", "0");
+
+		topPairs.forEach((p, i) => {
+			list.append("li")
+				.style("margin-bottom", "8px")
+				.html(`<strong>#${i+1}:</strong> Numbers ${p.num1} & ${p.num2} — <span>${p.value} times</span>`);
+		});
+	}
+	
+	async function loadCSVData() {
+		try {
+			const response = await fetch('data.csv');
+			const data = await response.text();
+			
+			const rows = data.split('\n').filter(row => row.trim() !== '').slice(1);
+			
+			return rows.map(row => {
+				const columns = row.split(',');
+				return {
+					date: columns[1],
+					numbers: [2,3,4,5,6,7,8].map(i => columns[i]?.trim()),
+					special: columns[8]?.trim()
+				};
+			});
+		} catch (error) {
+			console.log("Cound not load CSV:", error);
+			return [];
+		}
+	}
+	
+	function updateRangeValue(val) {
+		rangeValue = val;
+		document.getElementById('range-value').innerText = val;
+	}
+	
+	function countPairwiseNumbers() {
+		allValues = [...new Set(markSixData.flatMap(d => d.numbers))].sort((a, b) => a - b);
+		const size = allValues.length;
+		const indexMap = new Map(allValues.map((v, i) => [v, i]));
+		matrix = Array.from({length: size}, () => Array(size).fill(0));
+		
+		markSixData.forEach(obj => {
+			const arr = obj.numbers;
+			arr.forEach(sourceVal => {
+				arr.forEach(targetVal => {
+					if (sourceVal !== targetVal) {
+						const i = indexMap.get(sourceVal);
+						const j = indexMap.get(targetVal);
+						matrix[i][j]++;
+					}
+				});
+			});
+		});
+	}
+			
+	async function getTopPairs(count = 9) {
+		let pairs = [];
+		
+		for (let i = 0; i< matrix.length; i++) {
+			for (let j = i + 1; j < matrix[i].length; j++) {
+				if (matrix[i][j] > 0) {
+					pairs.push({
+						num1: allValues[i],
+						num2: allValues[j],
+						value: matrix[i][j]
+					});
+				}
+			}
+		}
+		pairs.sort((a, b) => b.value - a.value);
+		
+		return pairs.slice(0, count);
+	}
+	
+	function handleNodeClick(event, d) {
+		selectedIndex = d.index;
+		const threshold = +document.getElementById('chord-slider').value;
+
+		d3.selectAll(".ribbon")
+//			.transition()
+//			.duration(200)
+			.style("opacity", ribbon => {
+				const isConnected = ribbon.source.index === selectedIndex || ribbon.target.index === selectedIndex;
+				const isAboveThreshold = ribbon.source.value >= threshold;
+						
+				return (isConnected && isAboveThreshold)
+					? 0.9 : 0.02;
+			});
+					
+		d3.selectAll(".group")
+			.style("opacity", group => {
+				return group.index === selectedIndex ? 1 : 0.3;
+			});
+
+		event.stopPropagation();
+	}
+
+	function drawChordDiagram() {
+		const width = 400; //400
+		const height = 400; //400
+		const outerRadius = Math.min(width, height) * 0.5 - 40;
+		const innerRadius = outerRadius - 20;
+		const labelRadius = outerRadius + 15;
+
+		const chord = d3.chord()
+			.padAngle(0.02) // 0.05
+			.sortSubgroups(d3.descending);
+
+		const chords = chord(matrix);
+		const color = d3.scaleSequential(d3.interpolateRainbow).domain([0, chords.groups.length]);
+		
+		const svg = d3.select("#chords")
+			.attr("viewBox", [-width / 2, -height / 2, width, height]);
+		
+		const ribbonGroup = svg.append("g").attr("id", "ribbon-container");
+		const arcGroup = svg.append("g").attr("id", "arc-container");
+		
+		const group = arcGroup.selectAll("g")
+			.data(chords.groups)
+			.join("g")
+			.attr("class", "group")
+			.style("cursor", "pointer")
+			.on("click", handleNodeClick);
+			
+		group.append("path")
+			.attr("fill", d => color(d.index))
+			.attr("stroke", d => d3.rgb(color(d.index)).darker())
+			.attr("d", d3.arc()
+				.innerRadius(innerRadius)
+				.outerRadius(outerRadius)
+			);
+
+		ribbonGroup.style("fill-opacity", 0.67)
+			.selectAll("path")
+			.data(chords)
+			.join("path")
+				.attr("class", "ribbon")
+				.attr("d", d3.ribbon().radius(innerRadius))
+				.attr("fill", d => color(d.source.index))
+				.attr("stroke", d => d3.rgb(color(d.source.index)).darker())
+				.style("vector-effect", "non-scaling-stroke")
+				.attr("stroke-width", d => strokeScale(d.source.value) + "px")
+				.style("stroke-opacity", 0.8)
+				.append("title")
+					.text(d => `${allValues[d.source.index]} ↔ ${allValues[d.target.index]}: ${d.source.value}`) ;
+					
+		const labels = svg.append("g")
+			.selectAll("g")
+			.data(chords.groups)
+			.join("g")
+			.attr("transform", d => {
+				return `
+					rotate(${((d.startAngle + d.endAngle) / 2 * 180 / Math.PI - 90)})
+					translate(${labelRadius})
+					${"rotate(90)"}
+				`;
+			})
+			.style("cursor", "pointer");
+		
+		const text = labels.append("text")
+			.attr("dy", "0.35em")
+			.attr("text-anchor", "middle")
+			.text(d => d.index + 1)
+			.style("font-family", "sans-serif")
+			.style("font-size", "10px")
+			.style("font-weight", "bold")
+			.style("cursor", "default")
+			.style("user-select", "none")
+			.style("pointer-events", "none");
+		
+		labels.insert("circle", "text")
+			.attr("fill", "white")
+			.attr("stroke", d => color(d.index))
+			.attr("stroke-width", 1)
+			.attr("r", "10px");
+			
+		labels.on("click", handleNodeClick)
+
+		svg.on("click", () => {
+		const threshold = +document.getElementById('chord-slider').value;
+			d3.selectAll(".ribbon")
+//				.transition()
+//				.duration(200)
+				.style("opacity", d => {
+					return d.source.value >= threshold ? 0.7 : 0
+				})
+				.style("pointer-events", d => {
+					return d.source.value >= threshold ? "auto" : "none";
+				})
+				.style("stroke", d => d3.rgb(color(d.source.index)).darker());
+				
+			d3.selectAll(".group").style("opacity", 1);
+			selectedIndex = -1;
+		});
+	}
+	
+	function resetDiagram() {
+		document.getElementById('chord-slider').value = minRange;
+		updateRangeValue(minRange);
+		d3.selectAll(".ribbon")
+//			.transition()
+//			.duration(200)
+			.style("opacity", 0.7)
+			.style("pointer-events", "auto")
+			
+		d3.selectAll(".group").style("opacity", 1);
+		selectedIndex = -1;
+	}
+
+	startApp();
+
+</script>
+</body>
+</html>
